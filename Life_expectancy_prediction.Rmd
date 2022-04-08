@@ -1,0 +1,242 @@
+---
+title: "Predicción de la Esperanza de vida ¿El consumo de alcohol alarga la vida?"
+author: "Sergio Conde"
+output:
+  html_document:
+    toc: yes
+    toc_depth: '3'
+    df_print: paged
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+params:
+  lang: ES
+subtitle: Análisis Exploratorio de Datos. Máster en Ciencia de Datos - UV
+language:
+  label:
+    fig: 'Figura '
+    tab: 'Tabla '
+    eq: 'Ecuación '
+    thm: 'Teorema '
+    lem: 'Lema '
+    def: 'Definición '
+    cor: 'Corolario '
+    prp: 'Proposición '
+    exm: 'Ejemplo '
+    exr: 'Ejercicio '
+    proof: 'Demostración. '
+    remark: 'Nota: '
+    solution: 'Solución. '
+---
+
+```{r setup, cache = F, echo = F, message = F, warning = F, tidy = F}
+
+# CONFIGURACIÓN GENERAL
+library(knitr)
+options(width = 100)
+# Opciones generales chunks
+
+#include = FALSE evita que el código y los resultados aparezcan en el archivo terminado. R Markdown aún ejecuta el código en el fragmento y los resultados pueden ser utilizados por otros fragmentos.
+#echo = FALSE evita que el código, pero no los resultados, aparezcan en el archivo terminado. Esta es una manera útil de incrustar figuras.
+#message = FALSE evita que los mensajes generados por el código aparezcan en el archivo finalizado.
+#warning = FALSE evita que las advertencias generadas por el código aparezcan en el final.
+
+#fig.cap = "..." agrega un título a los resultados gráficos.
+
+opts_chunk$set(echo=F, message = F, error = F, warning = F, comment = NA, fig.align = 'center', dpi = 100, tidy = F, cache.path = '.cache/', fig.path = './figure/',fig.width=6, fig.height=4)
+
+#options(xtable.type = 'html')
+knit_hooks$set(inline = function(x) {
+  
+  if(is.numeric(x)) {
+    round(x, getOption('digits'))
+  } else {
+    paste(as.character(x), collapse = ', ')
+  }
+})
+#knit_hooks$set(plot = knitr:::hook_plot_html)
+```
+
+# Librerías cargadas
+
+
+```{r, echo=FALSE, message=FALSE}
+# Especificamos las librerías necesarias en esta lista
+
+packages = c('leaps', 'dplyr', 'mice', 'ggplot2', 'gridExtra', 'car')
+
+#use this function to check if each package is on the local machine
+#if a package is installed, it will be loaded
+#if any are not, the missing package(s) will be installed and loaded
+package.check <- lapply(packages, FUN = function(x) {
+  if (!require(x, character.only = TRUE)) {
+    install.packages(x, dependencies = TRUE,repos='http://cran.rediris.es')
+    library(x, character.only = TRUE)
+  }
+})
+
+#verify they are loaded
+search()
+
+```
+
+
+# Importación y preparación de los datos
+
+Comenzamos importando los datos y transformando la variable Status de character a factor, además de eliminar la columna population debido a los errores en sus datos:
+
+```{r, echo = TRUE}
+load("EV2014.RData")
+EV2014$Status <- factor(EV2014$Status, levels = c('Developing', 'Developed'), labels = c(0,1))
+EV2014 <- select(EV2014, -Population)
+
+load("EV2015.RData")
+EV2015$Status <- factor(EV2015$Status, levels = c('Developing', 'Developed'), labels = c(0,1))
+EV2015 <- select(EV2015, -Population)
+NAdata <- EV2014[rowSums(is.na(EV2014)) > 0, ]
+#View(EV2014)
+```
+
+# Parte 1
+## Imputación de datos
+
+Observamos que los datos con NA componen un `r (nrow(NAdata)/nrow(EV2014))*100`% del total de los datos, además de estar compuestos en su mayoría por países en desarrollo. Es decir, se trata de datos "Missing at Random". Por tanto, lo lógico es buscar una manera para imputar dichos datos. En nuestro caso, utilizaremos la librería mice.
+
+```{r}
+md.pattern(EV2014)
+```
+
+En la imagen anterior observamos que la mayor cantidad de datos perdidos se encuentra en la variable  GDP con 28 NA. Procedemos ahora a la importación con ayuda del paquete *Mice*.
+
+```{r, results = 'hide', echo = TRUE}
+mice_imputes = mice(EV2014, m=1, maxit = 50, seed = 500)
+```
+
+```{r}
+densityplot(mice_imputes)
+```
+
+
+Si nos fijamos en la distribución de los datos imputados, vemos que es muy similar a la de los orignales, así que podemos asumir su validez.
+
+```{r}
+Imputed_data=complete(mice_imputes)
+```
+
+## BIC
+
+Usamos la funcion regsubsets, que probará todos los modelos con hasta 18 variables y nos ayudará a sacar el
+modelo con menor BIC
+
+```{r}
+ajuste.todo <- regsubsets(Life.expectancy~ .-Country-Year, data=Imputed_data, nvmax = 18)
+resumen <- summary(ajuste.todo)
+
+plot(1:18, resumen$bic, xlab = "Nº Variables", main = "BIC",
+     type = "b")
+abline(v = which.min(resumen$bic), col = 2)
+```
+
+
+```{r, include = FALSE}
+resumen
+```
+
+Obtenemos pues, que el número ideal de variables a utilizar será 4. En concreto, Adult.Mortality, Total.expenditure, HIV-AIDS e Income.composition.of.resources. Vamos ahora a compararlo con el método stepwise.
+
+## Stepwise
+
+```{r}
+ajuste <- lm(Life.expectancy ~ .-Country-Year, data=Imputed_data)
+ajuste <- step(ajuste , direction = 'both',trace=0)
+summary(ajuste)
+```
+Obtenemos un modelo con más variables, pero donde las tres de nuevas no son significativas. Comparamos con el de las cuatro variables.
+
+```{r}
+ajuste4 <- lm(Life.expectancy ~ Adult.Mortality + Total.expenditure + HIV.AIDS + Income.composition.of.resources, data=Imputed_data)
+summary(ajuste4)
+```
+Obtenemos un modelo que explica una cantidad muy similar en los dos casos, pero como en el segundo caso tenemos todas las variables con un p-valor significativo, partiremos de ese modelo e intentaremos hacer alguna transformación para mejorarlo.
+
+## Modelo final
+
+Hemos ido probando distintas combinaciones y añadiendo y quitando variables hasta llegar al que creemos el más adecuado. Tenemos entonces un modelo con tres de las variables del anterior pero haciendo una transformación cuadrática sobre HIV.AIDS, Adult.Mortality e Income.composition.of.resources.
+
+```{r}
+ajustefinal <- lm((Life.expectancy~ Total.expenditure + poly(HIV.AIDS, 2) + poly(Adult.Mortality, 2) + poly(Income.composition.of.resources, 
+    2)), data = Imputed_data)
+  #update(ajuste,~.-Total.expenditure-infant.deaths-under.five.deaths-HIV.AIDS + poly(HIV.AIDS, 2)- Adult.Mortality + poly(Adult.Mortality, 2)-Income.composition.of.resources+poly(Income.composition.of.resources, 2))
+summary(ajustefinal)
+```
+
+
+## Puntos influyentes
+
+Por último, eliminaremos los puntos más influyentes que nos permiten aumentar nuestra capacidad de predicción. Para ello, hacemos un plot de los hatvalues para buscar los outlayers. Debemos tener cuidado también de no eliminar más de la cuenta y sobreajustar el modelo.
+
+```{r}
+n<-nrow(Imputed_data)
+plot(fitted(ajustefinal),hatvalues(ajustefinal),main="leverages vs fitted", ylim = c(0, 0.3))
+
+p <- length(coef(ajustefinal))
+abline(h=2*p/n,col="red",lwd=1);  
+abline(h=3*p/n,col="red",lwd=3);
+#identify(fitted(ajustefinal),hatvalues(ajustefinal))
+```
+
+
+```{r}
+Infl <- c('16','28', '33', '58', '61', '65', '89', '129', '131')
+#  c('16', '28', '33',  '53', '58', '51', '65', '118', '129', '131', '156', '170')
+ajuste_sinInfl<-update(ajustefinal, data=Imputed_data[setdiff(rownames(Imputed_data), Infl),])
+summary(ajuste_sinInfl)
+```
+
+
+```{r, include = FALSE}
+influencePlot(ajuste_sinInfl)
+```
+
+```{r}
+vif(ajuste_sinInfl)
+```
+
+Tampoco tenemos problemas de colinealidad, así que, nos quedaremos con este modelo para las predicciones.
+
+## Predicción
+
+
+Imputamos también los datos faltantes del 2015. Utilzamos de nuevo el paquete mice, excepto para la columna Total.expenditure, para la que copiamos los datos del año anterior.
+
+```{r, results = 'hide', echo = TRUE}
+mice_imputes_2015 = mice(EV2015, m=1, maxit = 50, seed = 500)
+Imputed_data_2015 =complete(mice_imputes_2015)
+Imputed_data_2015$Total.expenditure <- Imputed_data$Total.expenditure 
+```
+
+Hacemos la predicción y la guardamos en un archivo RData.
+
+```{r, echo = TRUE}
+x0 <- Imputed_data_2015 %>% select(c('Country', 'Adult.Mortality', 'HIV.AIDS', 'Income.composition.of.resources', 'Total.expenditure'))
+predicted <- predict(ajuste_sinInfl, newdata = x0)
+```
+
+```{r, echo = TRUE}
+data <-  data.frame(Country = Imputed_data_2015$Country, Predictions = predicted)
+save(data, file = "predictions.RData")
+#View(data)
+```
+
+Exportamos el archivo csv
+
+```{r, echo = TRUE}
+write.csv(data$Predictions,"predictions.csv",row.names = FALSE)
+```
+
+Por último calcularemos el rmse de la predicción:
+
+```{r}
+sqrt(mean((data$Predictions - EV2015)^2))
+```
+
